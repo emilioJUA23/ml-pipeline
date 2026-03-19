@@ -1,11 +1,11 @@
 IMAGE_NAME  := ml-pipeline
 CONTAINER   := ml-pipeline-run
-MLFLOW_PORT := 5000
+MLFLOW_PORT := 5001
 
 # Absolute path to the project root (so volume mounts work from any CWD)
 PROJECT_DIR := $(shell pwd)
 
-.PHONY: help build train train-custom mlflow-ui shell clean fclean
+.PHONY: help build train train-custom test mlflow-ui shell clean fclean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -20,6 +20,7 @@ build: ## Build the Docker image
 
 train: build ## Run training with default hyperparams (alpha=0.7, l1_ratio=0.7)
 	docker run --rm \
+		-e MLFLOW_TRACKING_URI=file:///app/mlruns \
 		-v $(PROJECT_DIR)/mlruns:/app/mlruns \
 		-v $(PROJECT_DIR)/mlflow-artifacts:/app/mlflow-artifacts \
 		-v $(PROJECT_DIR)/data:/app/data \
@@ -28,15 +29,28 @@ train: build ## Run training with default hyperparams (alpha=0.7, l1_ratio=0.7)
 
 train-custom: build ## Run training with custom params — usage: make train-custom ALPHA=0.3 L1=0.5
 	docker run --rm \
+		-e MLFLOW_TRACKING_URI=file:///app/mlruns \
 		-v $(PROJECT_DIR)/mlruns:/app/mlruns \
 		-v $(PROJECT_DIR)/mlflow-artifacts:/app/mlflow-artifacts \
 		-v $(PROJECT_DIR)/data:/app/data \
 		--name $(CONTAINER) \
 		$(IMAGE_NAME) python main.py --alpha $(ALPHA) --l1_ratio $(L1)
 
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+test: build ## Run full test suite with coverage
+	docker run --rm \
+		-e MLFLOW_TRACKING_URI=file:///app/mlruns \
+		-v $(PROJECT_DIR)/mlruns:/app/mlruns \
+		-v $(PROJECT_DIR)/data:/app/data \
+		-v $(PROJECT_DIR)/red-wine-quality.csv:/app/red-wine-quality.csv \
+		--name $(CONTAINER)-test \
+		$(IMAGE_NAME) \
+		pytest tests/ -v --cov=steps --cov-report=term-missing
+
 # ── MLflow UI ──────────────────────────────────────────────────────────────────
 
-mlflow-ui: ## Start the MLflow tracking UI at http://localhost:5000
+mlflow-ui: ## Start the MLflow tracking UI at http://localhost:5001
 	docker run --rm \
 		-v $(PROJECT_DIR)/mlruns:/app/mlruns \
 		-v $(PROJECT_DIR)/mlflow-artifacts:/app/mlflow-artifacts \

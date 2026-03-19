@@ -1,0 +1,13 @@
+data:
+  raw_path: red-wine-quality.csv
+  cleaned_filename: cleaned_wine.csv
+
+model:
+  alpha: 0.7
+  l1_ratio: 0.7
+  random_state: 42
+  test_size: 0.25
+  random_seed: 40
+
+mlflow:
+  experiment_name: experiment_1

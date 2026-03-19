@@ -9,6 +9,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files
 COPY main.py .
 COPY red-wine-quality.csv .
+COPY steps/ steps/
+COPY conf/ conf/
+COPY tests/ tests/
 
 # Directories that will be mounted as volumes in production;
 # create them so the container works standalone too

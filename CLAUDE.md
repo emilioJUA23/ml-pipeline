@@ -20,19 +20,20 @@ End-to-end ML pipeline demonstration using red wine quality prediction as the ex
 ## Current State
 
 ### Done
-- `main.py` — trains an ElasticNet regression model, logs params/metrics/model to MLflow. Accepts `--alpha` and `--l1_ratio` CLI args.
-- `Dockerfile` — `python:3.12.4-slim`, installs all deps, sets `GIT_PYTHON_REFRESH=quiet`, exposes port 5000. Default CMD runs training.
-- `Makefile` — automates build, train, train-custom, mlflow-ui, shell, clean, fclean targets. All run targets mount `mlruns/`, `mlflow-artifacts/`, `data/` as volumes.
-- `requirements.txt` — `hydra-core==1.3.2`, `mlflow==2.19.0`, `scikit-learn==1.6.0`, `pandas==2.2.3`, `numpy==2.2.1`
-- MLflow tracking working: experiment `experiment_1`, SQLite backend (`mlflow.db`), artifacts in `mlflow-artifacts/`
+- `main.py` — Hydra-configured entry point wiring ingest → clean → train. Uses `conf/pipeline.yaml` for all params.
+- `steps/ingest.py` — loads raw CSV, validates schema, logs raw file as first MLflow artifact under `raw_data/`
+- `steps/clean.py` — enforces dtypes (features→float64, quality→int8), drops duplicates/nulls/out-of-range rows, clips to plausible ranges, logs cleaned CSV under `cleaned_data/` + 4 metrics
+- `conf/pipeline.yaml` — Hydra config for data paths, model hyperparams, MLflow experiment name
+- `tests/` — 46 tests, 100% coverage on `steps/`; unit, data, mlflow artifact, and integration suites
+- `Dockerfile` — `python:3.12.4-slim`, copies steps/conf/tests, sets `GIT_PYTHON_REFRESH=quiet`, exposes port 5000
+- `Makefile` — build, train, train-custom, test, mlflow-ui, shell, clean, fclean
+- `requirements.txt` — all deps including `pytest==8.3.4` and `pytest-cov==6.0.0`
+- MLflow tracking: experiment `experiment_1`, SQLite backend (`mlflow.db`), artifacts in `mlflow-artifacts/`
 
 ### Still To Build
-- Data cleaning / preprocessing module
 - Feature engineering pipeline
 - Prediction / inference API (FastAPI or Flask)
-- Unit tests and code coverage
 - Model accuracy threshold evaluation
-- Hydra config integration for hyperparameter management
 - CI/CD workflow (GitHub Actions or similar)
 
 ## Tech Stack
@@ -112,6 +113,10 @@ Every pipeline step is built using two agents working in tandem. This is the sta
 - Every step must reach PASS before moving to the next one.
 - Commits only happen after explicit user approval.
 - On each new step, update this file's **Current State** section accordingly.
+
+### Known limitation
+
+Subagents (mlops-dev, mlops-qa) do not inherit write/bash permissions from the parent session. When they hit the sandbox wall, the main Claude instance takes over and executes both roles directly, following the same conventions and quality bar.
 
 ## Artifact Strategy
 
