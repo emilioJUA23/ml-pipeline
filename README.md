@@ -7,7 +7,7 @@ End-to-end ML pipeline demonstration predicting hotel booking cancellations. The
 | # | Feature | Status |
 |---|---|---|
 | 1 | Data ingestion & cleaning | done |
-| 2 | Feature engineering | in progress |
+| 2 | Feature engineering | done |
 | 3 | Model training / retraining | pending |
 | 4 | Prediction API | pending |
 | 5 | Testing & code coverage | done |
@@ -72,6 +72,7 @@ After `make train`, run `make mlflow-ui` and open **http://localhost:5001**.
 Navigate to `hotel_booking_pipeline` → select a run → **Artifacts** tab:
 - `raw_data/hotel_bookings.csv` — original dataset as ingested
 - `cleaned_data/cleaned_hotel_bookings.csv` — nulls filled, outliers removed, typed dataset
+- `engineered_data/engineered_hotel_bookings.csv` — 62 model-ready features
 
 ## Dataset
 
@@ -92,12 +93,13 @@ ml-pipeline/
 ├── main.py                      # Pipeline entry point (Hydra-configured)
 ├── steps/
 │   ├── ingest.py                # Step 1: load CSV, validate schema, drop leaky cols, log artifact
-│   └── clean.py                 # Step 2: fill nulls, remove outliers, dedup, log artifact
+│   ├── clean.py                 # Step 2: fill nulls, remove outliers, dedup, log artifact
+│   └── feature_engineer.py     # Step 3: derive 32 features, encode categoricals, log artifact
 ├── conf/
 │   └── pipeline.yaml            # Hydra config (paths, model params, experiment name)
 ├── tests/
 │   ├── conftest.py              # Shared fixtures
-│   ├── unit/                    # Unit tests for each step
+│   ├── unit/                    # Unit tests per step (ingest, clean, feature_engineer)
 │   ├── data/                    # Schema and value validation tests
 │   ├── mlflow_artifacts/        # MLflow metric and artifact logging tests
 │   └── integration/             # End-to-end pipeline tests against real data

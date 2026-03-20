@@ -24,18 +24,16 @@ End-to-end ML pipeline demonstration using hotel booking cancellation prediction
 - `steps/ingest.py` — loads raw hotel bookings CSV, validates 32-column schema, drops leaky columns (`reservation_status`, `reservation_status_date`), logs raw file as first MLflow artifact under `raw_data/`
 - `steps/clean.py` — fills nulls (children/agent/company→0, country→"Unknown"), removes outliers (adults>10, adr<0 or >2000, extreme stay lengths), drops duplicates, enforces dtypes (is_canceled→int8), logs cleaned CSV under `cleaned_data/` + 4 metrics
 - `conf/pipeline.yaml` — Hydra config for data paths, model params, MLflow experiment name (`hotel_booking_pipeline`)
-- `tests/` — 36 tests, all passing; unit, data, mlflow artifact, and integration suites
+- `steps/feature_engineer.py` — builds 32 new features across 7 groups (temporal, booking behavior, stay composition, guest history, room & service, booking source, encoding); outputs 62-column all-numeric DataFrame; logs engineered CSV + 2 metrics to MLflow
+- `tests/` — 90 tests, all passing, 100% coverage on `steps/`; unit, data, mlflow artifact, and integration suites
 - `Dockerfile` — `python:3.12.4-slim`, installs deps only (code comes via volume mount), exposes port 5000
 - `Makefile` — `dev` (persistent container), `test`, `train`, `shell`, `mlflow-ui`, `stop`, `logs`, `build`, `clean`, `fclean`
 - `requirements.txt` — all deps including `pytest==8.3.4` and `pytest-cov==6.0.0`
 - MLflow tracking: experiment `hotel_booking_pipeline`, file-based backend, artifacts in `mlflow-artifacts/`
 - Docker dev workflow: full project dir mounted at `/app`; all make targets use `docker exec` — no rebuild on code changes
 
-### In Progress
-- Feature engineering (`steps/feature_engineer.py`) — plan designed, implementation next
-
 ### Still To Build
-- Model training (binary classification — predict `is_canceled`)
+- Model training (`steps/train.py`) — binary classifier on `is_canceled`, AUC-ROC + F1 metrics, log model artifact
 - Prediction / inference API (FastAPI or Flask)
 - Model accuracy threshold evaluation
 - CI/CD workflow (GitHub Actions or similar)
