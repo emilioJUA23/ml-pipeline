@@ -1,18 +1,18 @@
-import pytest
 import mlflow
-from steps.ingest import ingest
-from steps.clean import clean, FEATURE_COLUMNS
+from steps.ingest import ingest, LEAKY_COLUMNS
+from steps.clean import clean, NUMERIC_COLUMNS, TARGET_COLUMN
 
-
-REAL_CSV = "red-wine-quality.csv"
+REAL_CSV = "data/raw/hotel_bookings.csv"
 
 
 def test_ingest_real_csv(mlflow_tracking_uri):
-    """Ingest loads the real dataset without error."""
+    """Ingest loads the real dataset without error and drops leaky columns."""
     mlflow.set_experiment("test_integration")
     with mlflow.start_run():
         df = ingest(REAL_CSV)
-    assert len(df) > 100  # dataset has 1599 rows
+    assert len(df) > 10000
+    for col in LEAKY_COLUMNS:
+        assert col not in df.columns
 
 
 def test_clean_real_csv(mlflow_tracking_uri):
@@ -23,13 +23,22 @@ def test_clean_real_csv(mlflow_tracking_uri):
         df = clean(raw)
 
     assert len(df) > 0
-    for col in FEATURE_COLUMNS:
-        assert str(df[col].dtype) == "float64", f"{col} should be float64"
-    assert str(df["quality"].dtype) == "int8"
+    assert df[TARGET_COLUMN].dtype.name == "int8"
     assert df.isnull().sum().sum() == 0
+    assert df.duplicated().sum() == 0
 
 
-def test_clean_artifacts_exist_on_disk(mlflow_tracking_uri, tmp_path):
+def test_clean_real_csv_reduces_rows(mlflow_tracking_uri):
+    """Cleaning removes at least some rows from the real dataset (outliers/dupes)."""
+    mlflow.set_experiment("test_integration")
+    with mlflow.start_run():
+        raw = ingest(REAL_CSV)
+        df = clean(raw)
+
+    assert len(df) < len(raw)
+
+
+def test_clean_artifacts_exist_on_disk(mlflow_tracking_uri):
     """MLflow artifacts are written to disk after the run."""
     mlflow.set_experiment("test_integration")
     with mlflow.start_run() as run:

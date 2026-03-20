@@ -1,14 +1,14 @@
 # ml-pipeline
 
-End-to-end ML pipeline demonstration. The model (ElasticNet on red wine quality) is just an example — the focus is the pipeline infrastructure.
+End-to-end ML pipeline demonstration predicting hotel booking cancellations. The model is just an example — the focus is the pipeline infrastructure.
 
 ## Goals
 
 | # | Feature | Status |
 |---|---|---|
 | 1 | Data ingestion & cleaning | done |
-| 2 | Feature engineering | pending |
-| 3 | Model training / retraining | done |
+| 2 | Feature engineering | in progress |
+| 3 | Model training / retraining | pending |
 | 4 | Prediction API | pending |
 | 5 | Testing & code coverage | done |
 | 6 | Accuracy / model evaluation | pending |
@@ -27,73 +27,91 @@ No local Python setup needed — everything runs inside the container.
 ## Quick Start
 
 ```bash
-# Build the image
-make build
+# Build the image and start the persistent dev container
+make dev
 
-# Train with default hyperparams (alpha=0.7, l1_ratio=0.7)
+# Run the pipeline (ingest → clean)
 make train
 
-# Train with custom hyperparams
-make train-custom ALPHA=0.3 L1=0.5
-
-# Run test suite
+# Run test suite with coverage
 make test
 
 # Open MLflow UI at http://localhost:5001
 make mlflow-ui
 
-# Drop into a shell inside the container
+# Drop into a bash shell inside the container
 make shell
+
+# Stop the dev container
+make stop
 ```
+
+> Code changes on your host are live inside the container immediately — no rebuild needed.
+> Only run `make build` again when `requirements.txt` changes.
 
 ## Makefile Targets
 
 | Target | Description |
 |---|---|
-| `make build` | Build the Docker image |
-| `make train` | Run training with default params |
-| `make train-custom ALPHA=X L1=Y` | Run training with custom hyperparams |
+| `make build` | Build the Docker image (deps only) |
+| `make dev` | Start persistent dev container with project dir mounted |
+| `make stop` | Stop and remove the dev container |
+| `make train` | Run the pipeline inside the dev container |
 | `make test` | Run full test suite with coverage |
 | `make mlflow-ui` | Start MLflow UI at `localhost:5001` |
-| `make shell` | Interactive bash shell in container |
-| `make clean` | Remove stopped containers |
-| `make fclean` | Remove containers and image |
+| `make shell` | Interactive bash shell inside the dev container |
+| `make logs` | Follow dev container logs |
+| `make clean` | Stop the dev container |
+| `make fclean` | Stop container and remove the Docker image |
 | `make help` | List all targets |
 
 ## Viewing Artifacts
 
 After `make train`, run `make mlflow-ui` and open **http://localhost:5001**.
 
-Navigate to `experiment_1` → select a run → **Artifacts** tab. You'll find:
-- `raw_data/red-wine-quality.csv` — original dataset as ingested
-- `cleaned_data/cleaned_wine.csv` — typed, deduplicated, clipped dataset
-- `linear_model/` — serialized ElasticNet model
+Navigate to `hotel_booking_pipeline` → select a run → **Artifacts** tab:
+- `raw_data/hotel_bookings.csv` — original dataset as ingested
+- `cleaned_data/cleaned_hotel_bookings.csv` — nulls filled, outliers removed, typed dataset
+
+## Dataset
+
+**Hotel Booking Demand** — 119,390 bookings from two hotels (2015–2017).
+
+| Property | Value |
+|---|---|
+| Raw rows | 119,390 |
+| Rows after cleaning | 86,727 |
+| Columns | 30 (32 raw minus 2 leaky) |
+| Target | `is_canceled` (binary: 27.3% positive) |
+| Leaky columns dropped | `reservation_status`, `reservation_status_date` |
 
 ## Project Structure
 
 ```
 ml-pipeline/
-├── main.py                  # Pipeline entry point (Hydra-configured)
+├── main.py                      # Pipeline entry point (Hydra-configured)
 ├── steps/
-│   ├── ingest.py            # Step 1: load CSV, log raw artifact
-│   └── clean.py             # Step 2: type enforcement, dedup, clip, log cleaned artifact
+│   ├── ingest.py                # Step 1: load CSV, validate schema, drop leaky cols, log artifact
+│   └── clean.py                 # Step 2: fill nulls, remove outliers, dedup, log artifact
 ├── conf/
-│   └── pipeline.yaml        # Hydra config (paths, hyperparams, experiment name)
+│   └── pipeline.yaml            # Hydra config (paths, model params, experiment name)
 ├── tests/
-│   ├── conftest.py          # Shared fixtures
-│   ├── unit/                # Unit tests for each step
-│   ├── data/                # Schema and range validation tests
-│   ├── mlflow_artifacts/    # MLflow metric and artifact logging tests
-│   └── integration/         # End-to-end pipeline tests
-├── red-wine-quality.csv     # Raw dataset
-├── requirements.txt         # Python dependencies
-├── Dockerfile               # Container definition
-└── Makefile                 # Automation targets
+│   ├── conftest.py              # Shared fixtures
+│   ├── unit/                    # Unit tests for each step
+│   ├── data/                    # Schema and value validation tests
+│   ├── mlflow_artifacts/        # MLflow metric and artifact logging tests
+│   └── integration/             # End-to-end pipeline tests against real data
+├── data/
+│   └── raw/
+│       └── hotel_bookings.csv   # Raw dataset
+├── requirements.txt             # Python dependencies
+├── Dockerfile                   # Installs deps only — code comes via volume mount
+└── Makefile                     # Automation targets
 ```
 
 ## Notes
 
-- MLflow experiment: `experiment_1`
-- Train/test split: 75/25, random seed: 40
-- All Docker run targets set `MLFLOW_TRACKING_URI=file:///app/mlruns` to ensure artifacts persist correctly via volume mount
-- `mlruns/` is git-ignored — artifact history lives on your local machine only
+- MLflow experiment: `hotel_booking_pipeline`
+- Train/test split: 75/25, random seed: 40 / 42
+- `mlruns/` and `mlflow-artifacts/` are git-ignored — run history lives on your local machine only
+- All `make` targets that run code use `docker exec` against the persistent dev container

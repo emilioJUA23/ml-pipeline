@@ -1,66 +1,83 @@
 import logging
-import tempfile
 import os
+import tempfile
 import mlflow
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# Feature columns expected in the dataset
-FEATURE_COLUMNS = [
-    "fixed acidity",
-    "volatile acidity",
-    "citric acid",
-    "residual sugar",
-    "chlorides",
-    "free sulfur dioxide",
-    "total sulfur dioxide",
-    "density",
-    "pH",
-    "sulphates",
-    "alcohol",
+TARGET_COLUMN = "is_canceled"
+
+# Numeric columns (excluding target)
+NUMERIC_COLUMNS = [
+    "lead_time",
+    "arrival_date_year",
+    "arrival_date_week_number",
+    "arrival_date_day_of_month",
+    "stays_in_weekend_nights",
+    "stays_in_week_nights",
+    "adults",
+    "children",
+    "babies",
+    "is_repeated_guest",
+    "previous_cancellations",
+    "previous_bookings_not_canceled",
+    "booking_changes",
+    "days_in_waiting_list",
+    "adr",
+    "required_car_parking_spaces",
+    "total_of_special_requests",
+    "agent",
+    "company",
 ]
 
-TARGET_COLUMN = "quality"
+# Categorical columns (string-typed)
+CATEGORICAL_COLUMNS = [
+    "hotel",
+    "arrival_date_month",
+    "meal",
+    "country",
+    "market_segment",
+    "distribution_channel",
+    "reserved_room_type",
+    "assigned_room_type",
+    "deposit_type",
+    "customer_type",
+]
 
-# Scientifically plausible clip ranges for red wine physicochemical properties.
-# Sources: wine chemistry literature and UCI dataset observed ranges with margin.
-FEATURE_CLIP_RANGES = {
-    "fixed acidity":        (1.0,  20.0),
-    "volatile acidity":     (0.05,  2.0),
-    "citric acid":          (0.0,   1.5),
-    "residual sugar":       (0.5,  30.0),
-    "chlorides":            (0.01,  0.7),
-    "free sulfur dioxide":  (0.0,  100.0),
-    "total sulfur dioxide": (0.0,  350.0),
-    "density":              (0.985, 1.005),
-    "pH":                   (2.5,   4.5),
-    "sulphates":            (0.2,   2.5),
-    "alcohol":              (7.0,  15.0),
+# Columns where NaN means "none" (no agent, no company) — fill with 0
+NULL_FILL_ZERO = ["children", "agent", "company"]
+
+# Columns where NaN means unknown origin — fill with sentinel string
+NULL_FILL_UNKNOWN = ["country"]
+
+# Plausible bounds for outlier removal
+OUTLIER_BOUNDS = {
+    "adults": (1, 10),               # max 10 adults; 0-adult rows are data errors
+    "adr": (0.0, 2000.0),            # negative rates are impossible; >2000 is extreme
+    "stays_in_week_nights": (0, 30), # >30 week nights is implausible
+    "stays_in_weekend_nights": (0, 10),
 }
 
-QUALITY_MIN = 3
-QUALITY_MAX = 9
 
-
-def clean(df: pd.DataFrame, cleaned_filename: str = "cleaned_wine.csv") -> pd.DataFrame:
-    """Clean and strongly type the raw wine DataFrame.
+def clean(df: pd.DataFrame, cleaned_filename: str = "cleaned_hotel_bookings.csv") -> pd.DataFrame:
+    """Clean and type-enforce the raw hotel bookings DataFrame.
 
     Steps:
         1. Strip whitespace from column names.
-        2. Cast feature columns to float64.
-        3. Drop rows with null or out-of-range quality.
-        4. Cast quality to int8.
+        2. Fill known NaN-means-zero columns with 0.
+        3. Fill known NaN-means-unknown categoricals with "Unknown".
+        4. Remove rows outside plausible bounds (outliers / data errors).
         5. Drop fully duplicate rows.
-        6. Clip feature columns to plausible physical ranges.
+        6. Enforce dtypes: target → int8, numeric cols → correct types.
         7. Log cleaning metrics and the cleaned CSV as MLflow artifacts.
 
     Args:
-        df: Raw DataFrame from ingest step.
+        df: Raw DataFrame from ingest step (leaky columns already dropped).
         cleaned_filename: Filename used when saving the cleaned artifact.
 
     Returns:
-        Cleaned, strongly-typed DataFrame.
+        Cleaned, typed DataFrame ready for feature engineering.
     """
     df = df.copy()
     rows_before = len(df)
@@ -69,29 +86,39 @@ def clean(df: pd.DataFrame, cleaned_filename: str = "cleaned_wine.csv") -> pd.Da
     # 1. Strip whitespace from column names
     df.columns = [c.strip() for c in df.columns]
 
-    # 2. Cast feature columns to float64
-    for col in FEATURE_COLUMNS:
-        df[col] = pd.to_numeric(df[col], errors="coerce").astype("float64")
+    # 2. Fill NaN-means-zero columns
+    for col in NULL_FILL_ZERO:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
-    # 3. Drop rows with null or out-of-range quality
-    df = df.dropna(subset=[TARGET_COLUMN])
-    df = df[df[TARGET_COLUMN].between(QUALITY_MIN, QUALITY_MAX)]
+    # 3. Fill NaN-means-unknown categoricals
+    for col in NULL_FILL_UNKNOWN:
+        if col in df.columns:
+            df[col] = df[col].fillna("Unknown")
 
-    # 4. Cast quality to int8
-    df[TARGET_COLUMN] = df[TARGET_COLUMN].astype("int8")
+    # 4. Remove outlier / data-error rows
+    for col, (low, high) in OUTLIER_BOUNDS.items():
+        if col in df.columns:
+            before = len(df)
+            df = df[df[col].between(low, high)]
+            dropped = before - len(df)
+            if dropped:
+                logger.info("Dropped %d rows with %s outside [%s, %s]", dropped, col, low, high)
 
     # 5. Drop fully duplicate rows
     df = df.drop_duplicates()
 
-    # 6. Clip feature columns to plausible physical ranges
-    for col, (low, high) in FEATURE_CLIP_RANGES.items():
-        df[col] = df[col].clip(lower=low, upper=high)
+    # 6. Enforce dtypes
+    df[TARGET_COLUMN] = df[TARGET_COLUMN].astype("int8")
+    for col in NUMERIC_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     rows_after = len(df)
     rows_dropped = rows_before - rows_after
     logger.info("Cleaning complete — %d rows remaining, %d dropped", rows_after, rows_dropped)
 
-    # Log cleaning metrics to MLflow
+    # 7. Log cleaning metrics to MLflow
     mlflow.log_metric("rows_before", rows_before)
     mlflow.log_metric("rows_after", rows_after)
     mlflow.log_metric("rows_dropped", rows_dropped)

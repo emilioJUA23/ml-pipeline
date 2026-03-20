@@ -2,27 +2,17 @@ FROM python:3.12.4-slim
 
 WORKDIR /app
 
-# Install dependencies first (layer cache)
+# Install dependencies first (layer cache) — code comes in via volume mount
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project files
-COPY main.py .
-COPY red-wine-quality.csv .
-COPY steps/ steps/
-COPY conf/ conf/
-COPY tests/ tests/
-
-# Directories that will be mounted as volumes in production;
-# create them so the container works standalone too
-RUN mkdir -p data mlruns mlflow-artifacts
+# Create runtime directories so the container works before volumes are mounted
+RUN mkdir -p data/raw mlruns mlflow-artifacts
 
 # Suppress MLflow's noisy git-not-found warning
 ENV GIT_PYTHON_REFRESH=quiet
 
-# MLflow tracking server port
+# MLflow UI port
 EXPOSE 5000
 
-# Default: run training with configurable hyperparams
-# Override CMD at runtime, e.g.: docker run ... python main.py --alpha 0.3
 CMD ["python", "main.py"]

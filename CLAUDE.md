@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-End-to-end ML pipeline demonstration using red wine quality prediction as the example model. The model itself is not the focus — the **pipeline infrastructure** is.
+End-to-end ML pipeline demonstration using hotel booking cancellation prediction as the example model. The model itself is not the focus — the **pipeline infrastructure** is.
 
 ## Goals
 
@@ -20,18 +20,22 @@ End-to-end ML pipeline demonstration using red wine quality prediction as the ex
 ## Current State
 
 ### Done
-- `main.py` — Hydra-configured entry point wiring ingest → clean → train. Uses `conf/pipeline.yaml` for all params.
-- `steps/ingest.py` — loads raw CSV, validates schema, logs raw file as first MLflow artifact under `raw_data/`
-- `steps/clean.py` — enforces dtypes (features→float64, quality→int8), drops duplicates/nulls/out-of-range rows, clips to plausible ranges, logs cleaned CSV under `cleaned_data/` + 4 metrics
-- `conf/pipeline.yaml` — Hydra config for data paths, model hyperparams, MLflow experiment name
-- `tests/` — 46 tests, 100% coverage on `steps/`; unit, data, mlflow artifact, and integration suites
-- `Dockerfile` — `python:3.12.4-slim`, copies steps/conf/tests, sets `GIT_PYTHON_REFRESH=quiet`, exposes port 5000
-- `Makefile` — build, train, train-custom, test, mlflow-ui, shell, clean, fclean
+- `main.py` — Hydra-configured entry point wiring ingest → clean. Uses `conf/pipeline.yaml` for all params.
+- `steps/ingest.py` — loads raw hotel bookings CSV, validates 32-column schema, drops leaky columns (`reservation_status`, `reservation_status_date`), logs raw file as first MLflow artifact under `raw_data/`
+- `steps/clean.py` — fills nulls (children/agent/company→0, country→"Unknown"), removes outliers (adults>10, adr<0 or >2000, extreme stay lengths), drops duplicates, enforces dtypes (is_canceled→int8), logs cleaned CSV under `cleaned_data/` + 4 metrics
+- `conf/pipeline.yaml` — Hydra config for data paths, model params, MLflow experiment name (`hotel_booking_pipeline`)
+- `tests/` — 36 tests, all passing; unit, data, mlflow artifact, and integration suites
+- `Dockerfile` — `python:3.12.4-slim`, installs deps only (code comes via volume mount), exposes port 5000
+- `Makefile` — `dev` (persistent container), `test`, `train`, `shell`, `mlflow-ui`, `stop`, `logs`, `build`, `clean`, `fclean`
 - `requirements.txt` — all deps including `pytest==8.3.4` and `pytest-cov==6.0.0`
-- MLflow tracking: experiment `experiment_1`, SQLite backend (`mlflow.db`), artifacts in `mlflow-artifacts/`
+- MLflow tracking: experiment `hotel_booking_pipeline`, file-based backend, artifacts in `mlflow-artifacts/`
+- Docker dev workflow: full project dir mounted at `/app`; all make targets use `docker exec` — no rebuild on code changes
+
+### In Progress
+- Feature engineering (`steps/feature_engineer.py`) — plan designed, implementation next
 
 ### Still To Build
-- Feature engineering pipeline
+- Model training (binary classification — predict `is_canceled`)
 - Prediction / inference API (FastAPI or Flask)
 - Model accuracy threshold evaluation
 - CI/CD workflow (GitHub Actions or similar)
@@ -40,10 +44,10 @@ End-to-end ML pipeline demonstration using red wine quality prediction as the ex
 
 | Tool | Role |
 |---|---|
-| scikit-learn | Model training (ElasticNet) |
+| scikit-learn | Model training (binary classifier, TBD) |
 | MLflow | Experiment tracking, artifact versioning |
-| Hydra | Config management (installed, not yet wired in) |
-| Docker | Local containerized deployment |
+| Hydra | Config management |
+| Docker | Local containerized deployment (persistent dev container) |
 | Makefile | Pipeline automation |
 | pandas / numpy | Data handling |
 
@@ -52,7 +56,7 @@ End-to-end ML pipeline demonstration using red wine quality prediction as the ex
 | File | Purpose |
 |---|---|
 | `main.py` | Training script |
-| `red-wine-quality.csv` | Raw dataset (target: `quality`, range 3–9) |
+| `data/raw/hotel_bookings.csv` | Raw dataset (target: `is_canceled`, 119,390 rows × 32 cols) |
 | `requirements.txt` | Python dependencies |
 | `Dockerfile` | Container definition |
 | `Makefile` | Automation targets |
@@ -62,18 +66,30 @@ End-to-end ML pipeline demonstration using red wine quality prediction as the ex
 
 ## Running the Pipeline
 
-```bash
-# Docker (preferred)
-make build
-make train
-make train-custom ALPHA=0.3 L1=0.5
-make mlflow-ui        # http://localhost:5000
+All dev and testing happens inside Docker. Never use the local venv — it is not the source of truth.
 
-# Local Python
-source venv/bin/activate
-python main.py --alpha 0.7 --l1_ratio 0.7
-mlflow ui
+```bash
+# 1. Start the persistent dev container (do this once per session)
+make dev
+
+# 2. Run tests inside the container (code changes on host are live)
+make test
+
+# 3. Run the pipeline
+make train
+
+# 4. Open a shell inside the container
+make shell
+
+# 5. MLflow UI → http://localhost:5001
+make mlflow-ui
+
+# 6. Stop the dev container when done
+make stop
 ```
+
+The entire project directory is mounted at `/app` inside the container.
+Any code change on the host is immediately visible — no rebuild needed.
 
 ## Dev / QA Workflow
 
@@ -131,10 +147,88 @@ Expected artifacts per step:
 
 All artifacts go through `mlflow.log_artifact()` or `mlflow.sklearn.log_model()` so every run is fully reproducible and auditable from the MLflow UI.
 
+## Feature Engineering Plan
+
+Designed from EDA on the cleaned 86,727-row dataset. To be implemented in `steps/feature_engineer.py`.
+
+### Group 1 — Temporal
+| Feature | Source | Signal |
+|---|---|---|
+| `arrival_month_num` | `arrival_date_month` ordinal (Jan=1…Dec=12) | Seasonal trend |
+| `arrival_season` | month bins → Winter/Spring/Summer/Fall | Summer peaks at 32% cancel |
+| `is_high_season` | Jul/Aug = 1 | Sharpest cancel spike |
+| `arrival_day_of_week` | Reconstruct date from year+month+day | Weekend vs weekday arrivals |
+
+### Group 2 — Booking Behavior
+| Feature | Source | Signal |
+|---|---|---|
+| `lead_time_bucket` | Bins: 0-7, 8-30, 31-90, 91-180, 181-365, 365+ | Cancel rate: 9.6% → 40% |
+| `is_long_lead` | lead_time > 90 | Binary cut at inflection point |
+
+### Group 3 — Stay Composition
+| Feature | Source | Signal |
+|---|---|---|
+| `total_nights` | weekend + week nights | Length of stay |
+| `total_guests` | adults + children + babies | Group size |
+| `is_family` | children > 0 or babies > 0 | Family booking behavior |
+| `revenue_estimate` | adr × total_nights | Booking value proxy |
+| `is_zero_night` | total_nights == 0 | Anomalous — 3.9% cancel |
+
+### Group 4 — Guest History
+| Feature | Source | Signal |
+|---|---|---|
+| `has_prev_cancel` | previous_cancellations > 0 | 67.5% vs 26.5% cancel rate |
+| `prev_cancel_rate` | prev_cancels / (prev_cancels + prev_bookings) | Ratio; 0 if no history |
+
+### Group 5 — Room & Service
+| Feature | Source | Signal |
+|---|---|---|
+| `room_type_match` | reserved_room_type == assigned_room_type | Mismatch → only 4.7% cancel |
+| `has_special_requests` | total_of_special_requests > 0 | Strong commitment signal |
+| `has_parking` | required_car_parking_spaces > 0 | Commitment signal |
+| `has_booking_changes` | booking_changes > 0 | Re-engagement signal |
+| `has_waiting_list` | days_in_waiting_list > 0 | Waited = more committed |
+
+### Group 6 — Booking Source
+| Feature | Source | Signal |
+|---|---|---|
+| `is_direct_booking` | agent == 0 and company == 0 | Direct = lower cancel |
+| `is_company_booking` | company > 0 | Corporate booking flag |
+
+### Group 7 — Categorical Encoding
+| Column | Strategy | Reason |
+|---|---|---|
+| `hotel` | Binary (City=1, Resort=0) | 2 values |
+| `deposit_type` | One-hot | Non Refund = 94.6% cancel — its own world |
+| `market_segment` | One-hot | 8 values, strong signal (Online TA 35%) |
+| `customer_type` | One-hot | 4 values (Transient 30% vs Group 7.8%) |
+| `meal` | One-hot | 5 values |
+| `distribution_channel` | One-hot | 5 values |
+| `arrival_date_month` | Drop (replaced by month_num + season) | Redundant after encoding |
+| `country` | Target encoding | 178 unique values |
+| `reserved_room_type` / `assigned_room_type` | Drop after `room_type_match` | Raw values add noise |
+
+### Top predictors (from EDA)
+1. `deposit_type` (Non Refund = 94.6% cancel)
+2. `lead_time` / `lead_time_bucket`
+3. `has_prev_cancel` (67.5% vs 26.5%)
+4. `room_type_match` (4.7% vs 31.2%)
+5. `total_of_special_requests` (33% with 0 → 5.6% with 5)
+6. `market_segment`
+7. `is_repeated_guest` (7.7% vs 28.1%)
+8. `customer_type`
+9. `adr` / `revenue_estimate`
+10. `arrival_season`
+
 ## Notes
 
 - Random seed: `np.random.seed(40)` / `random_state=42`
 - Train/test split: 75/25
-- MLflow experiment name: `experiment_1`
+- MLflow experiment name: `hotel_booking_pipeline`
+- Target: `is_canceled` (binary: 0=not canceled, 1=canceled); 27.3% positive rate after cleaning
+- Leaky columns dropped at ingest: `reservation_status`, `reservation_status_date`
+- Model metrics: AUC-ROC, F1, precision, recall (not accuracy — imbalanced target)
+- Use `class_weight='balanced'` on the classifier
 - Project is local-only; no cloud deployment planned
 - Docker volume mounts ensure MLflow data persists on the host between runs
+- All dev/testing uses Docker (`make dev` → `make test` / `make train`); never use local venv

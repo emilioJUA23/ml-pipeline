@@ -1,11 +1,11 @@
-IMAGE_NAME  := ml-pipeline
-CONTAINER   := ml-pipeline-run
-MLFLOW_PORT := 5001
+IMAGE_NAME    := ml-pipeline
+DEV_CONTAINER := ml-pipeline-dev
+MLFLOW_PORT   := 5001
 
 # Absolute path to the project root (so volume mounts work from any CWD)
 PROJECT_DIR := $(shell pwd)
 
-.PHONY: help build train train-custom test mlflow-ui shell clean fclean
+.PHONY: help build dev stop logs test train shell mlflow-ui clean fclean
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -13,67 +13,49 @@ help: ## Show this help message
 
 # ── Image ──────────────────────────────────────────────────────────────────────
 
-build: ## Build the Docker image
+build: ## Build the Docker image (deps only — code comes via volume)
 	docker build -t $(IMAGE_NAME) .
 
-# ── Training ───────────────────────────────────────────────────────────────────
+# ── Dev container ──────────────────────────────────────────────────────────────
 
-train: build ## Run training with default hyperparams (alpha=0.7, l1_ratio=0.7)
-	docker run --rm \
-		-e MLFLOW_TRACKING_URI=file:///app/mlruns \
-		-v $(PROJECT_DIR)/mlruns:/app/mlruns \
-		-v $(PROJECT_DIR)/mlflow-artifacts:/app/mlflow-artifacts \
-		-v $(PROJECT_DIR)/data:/app/data \
-		--name $(CONTAINER) \
-		$(IMAGE_NAME)
+dev: build ## Start persistent dev container with full project dir mounted
+	@if docker ps -q -f name=$(DEV_CONTAINER) | grep -q .; then \
+		echo "Dev container '$(DEV_CONTAINER)' is already running."; \
+	else \
+		docker run -d \
+			--name $(DEV_CONTAINER) \
+			-e MLFLOW_TRACKING_URI=file:///app/mlruns \
+			-v $(PROJECT_DIR):/app \
+			-p $(MLFLOW_PORT):5000 \
+			$(IMAGE_NAME) \
+			sleep infinity && \
+		echo "Dev container started. Code at $(PROJECT_DIR) is live-mounted at /app."; \
+	fi
 
-train-custom: build ## Run training with custom params — usage: make train-custom ALPHA=0.3 L1=0.5
-	docker run --rm \
-		-e MLFLOW_TRACKING_URI=file:///app/mlruns \
-		-v $(PROJECT_DIR)/mlruns:/app/mlruns \
-		-v $(PROJECT_DIR)/mlflow-artifacts:/app/mlflow-artifacts \
-		-v $(PROJECT_DIR)/data:/app/data \
-		--name $(CONTAINER) \
-		$(IMAGE_NAME) python main.py --alpha $(ALPHA) --l1_ratio $(L1)
+stop: ## Stop and remove the dev container
+	docker rm -f $(DEV_CONTAINER) 2>/dev/null && echo "Stopped $(DEV_CONTAINER)." || true
 
-# ── Tests ─────────────────────────────────────────────────────────────────────
+logs: ## Follow dev container logs
+	docker logs -f $(DEV_CONTAINER)
 
-test: build ## Run full test suite with coverage
-	docker run --rm \
-		-e MLFLOW_TRACKING_URI=file:///app/mlruns \
-		-v $(PROJECT_DIR)/mlruns:/app/mlruns \
-		-v $(PROJECT_DIR)/data:/app/data \
-		-v $(PROJECT_DIR)/red-wine-quality.csv:/app/red-wine-quality.csv \
-		--name $(CONTAINER)-test \
-		$(IMAGE_NAME) \
-		pytest tests/ -v --cov=steps --cov-report=term-missing
+# ── Run inside dev container ────────────────────────────────────────────────────
 
-# ── MLflow UI ──────────────────────────────────────────────────────────────────
+test: ## Run full test suite inside the dev container
+	docker exec -i $(DEV_CONTAINER) pytest tests/ -v --cov=steps --cov-report=term-missing
 
-mlflow-ui: ## Start the MLflow tracking UI at http://localhost:5001
-	docker run --rm \
-		-v $(PROJECT_DIR)/mlruns:/app/mlruns \
-		-v $(PROJECT_DIR)/mlflow-artifacts:/app/mlflow-artifacts \
-		-p $(MLFLOW_PORT):5000 \
-		--name mlflow-ui \
-		$(IMAGE_NAME) \
-		mlflow ui --host 0.0.0.0 --port 5000
+train: ## Run the pipeline inside the dev container
+	docker exec -i $(DEV_CONTAINER) python main.py
 
-# ── Dev shell ──────────────────────────────────────────────────────────────────
+shell: ## Open an interactive bash shell inside the dev container
+	docker exec -it $(DEV_CONTAINER) bash
 
-shell: build ## Open an interactive bash shell inside the container
-	docker run --rm -it \
-		-v $(PROJECT_DIR)/mlruns:/app/mlruns \
-		-v $(PROJECT_DIR)/mlflow-artifacts:/app/mlflow-artifacts \
-		-v $(PROJECT_DIR)/data:/app/data \
-		-v $(PROJECT_DIR)/main.py:/app/main.py \
-		--name $(CONTAINER)-shell \
-		$(IMAGE_NAME) bash
+mlflow-ui: ## Start MLflow UI inside the dev container (http://localhost:5001)
+	docker exec -d $(DEV_CONTAINER) mlflow ui --host 0.0.0.0 --port 5000
+	@echo "MLflow UI → http://localhost:$(MLFLOW_PORT)"
 
 # ── Cleanup ────────────────────────────────────────────────────────────────────
 
-clean: ## Remove stopped containers
-	docker rm -f $(CONTAINER) mlflow-ui 2>/dev/null || true
+clean: stop ## Stop the dev container
 
-fclean: clean ## Remove containers AND the Docker image
+fclean: clean ## Stop container AND remove the Docker image
 	docker rmi -f $(IMAGE_NAME) 2>/dev/null || true
