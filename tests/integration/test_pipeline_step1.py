@@ -1,6 +1,7 @@
 import mlflow
 from steps.ingest import ingest, LEAKY_COLUMNS
-from steps.clean import clean, NUMERIC_COLUMNS, TARGET_COLUMN
+from steps.clean import clean, TARGET_COLUMN
+from steps.feature_engineer import feature_engineer
 
 REAL_CSV = "data/raw/hotel_bookings.csv"
 
@@ -38,16 +39,40 @@ def test_clean_real_csv_reduces_rows(mlflow_tracking_uri):
     assert len(df) < len(raw)
 
 
-def test_clean_artifacts_exist_on_disk(mlflow_tracking_uri):
-    """MLflow artifacts are written to disk after the run."""
+def test_feature_engineer_real_csv(mlflow_tracking_uri):
+    """Full pipeline ingest → clean → feature_engineer runs without error on real data."""
+    mlflow.set_experiment("test_integration")
+    with mlflow.start_run():
+        raw = ingest(REAL_CSV)
+        cleaned = clean(raw)
+        df = feature_engineer(cleaned)
+
+    assert len(df) == len(cleaned)
+    assert df.isnull().sum().sum() == 0
+    non_numeric = df.select_dtypes(exclude="number").columns.tolist()
+    assert non_numeric == [], f"Non-numeric columns after feature engineering: {non_numeric}"
+
+
+def test_feature_count_real_csv(mlflow_tracking_uri):
+    """Feature engineering produces more columns than cleaning."""
+    mlflow.set_experiment("test_integration")
+    with mlflow.start_run():
+        raw = ingest(REAL_CSV)
+        cleaned = clean(raw)
+        engineered = feature_engineer(cleaned)
+
+    assert len(engineered.columns) > len(cleaned.columns)
+
+
+def test_all_artifacts_exist_on_disk(mlflow_tracking_uri):
+    """raw_data, cleaned_data, and engineered_data artifacts are all logged."""
     mlflow.set_experiment("test_integration")
     with mlflow.start_run() as run:
         raw = ingest(REAL_CSV)
-        clean(raw)
+        cleaned = clean(raw)
+        feature_engineer(cleaned)
 
     client = mlflow.tracking.MlflowClient()
-    raw_artifacts = client.list_artifacts(run.info.run_id, "raw_data")
-    cleaned_artifacts = client.list_artifacts(run.info.run_id, "cleaned_data")
-
-    assert len(raw_artifacts) > 0, "No raw_data artifact found"
-    assert len(cleaned_artifacts) > 0, "No cleaned_data artifact found"
+    assert len(client.list_artifacts(run.info.run_id, "raw_data")) > 0
+    assert len(client.list_artifacts(run.info.run_id, "cleaned_data")) > 0
+    assert len(client.list_artifacts(run.info.run_id, "engineered_data")) > 0

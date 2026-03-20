@@ -7,6 +7,7 @@ from omegaconf import DictConfig
 
 from steps.ingest import ingest
 from steps.clean import clean
+from steps.feature_engineer import feature_engineer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,8 +30,15 @@ def main(cfg: DictConfig) -> None:
         logger.info("Step 2: Clean")
         df = clean(raw_df, cleaned_filename=cfg.data.cleaned_filename)
 
-        logger.info("Pipeline steps 1-2 complete. Shape after cleaning: %s", df.shape)
-        # Step 3 (feature engineering) and Step 4 (training) coming next.
+        # ── Step 3: Feature Engineering ───────────────────────────────────────
+        logger.info("Step 3: Feature Engineering")
+        df_features = feature_engineer(df, engineered_filename=cfg.data.engineered_filename)
+
+        logger.info(
+            "Pipeline steps 1-3 complete. Shape after feature engineering: %s",
+            df_features.shape,
+        )
+        # Step 4 (model training) coming next.
 
 
 if __name__ == "__main__":

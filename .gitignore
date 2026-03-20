@@ -2,7 +2,7 @@ venv/
 mlruns/
 mlflow.db
 mlflow-artifacts/
-data/
+/data/
 __pycache__/
 *.pyc
 .mypy_cache/
