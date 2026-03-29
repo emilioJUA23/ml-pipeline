@@ -2,16 +2,18 @@
 
 End-to-end ML pipeline demonstration predicting hotel booking cancellations. The model is just an example — the focus is the pipeline infrastructure.
 
+<!-- updated by emilioJUA23 -->
+
 ## Goals
 
 | # | Feature | Status |
 |---|---|---|
 | 1 | Data ingestion & cleaning | done |
 | 2 | Feature engineering | done |
-| 3 | Model training / retraining | pending |
-| 4 | Prediction API | pending |
+| 3 | Model training / retraining | done |
+| 4 | Prediction API | done |
 | 5 | Testing & code coverage | done |
-| 6 | Accuracy / model evaluation | pending |
+| 6 | Accuracy / model evaluation | done |
 | 7 | Artifact versioning (MLflow) | done |
 | 8 | Local deployment via Docker | done |
 | 9 | Fully automated pipeline steps (Makefile) | done |
@@ -30,7 +32,7 @@ No local Python setup needed — everything runs inside the container.
 # Build the image and start the persistent dev container
 make dev
 
-# Run the pipeline (ingest → clean)
+# Run the full pipeline (ingest → clean → feature engineering → train)
 make train
 
 # Run test suite with coverage
@@ -73,6 +75,60 @@ Navigate to `hotel_booking_pipeline` → select a run → **Artifacts** tab:
 - `raw_data/hotel_bookings.csv` — original dataset as ingested
 - `cleaned_data/cleaned_hotel_bookings.csv` — nulls filled, outliers removed, typed dataset
 - `engineered_data/engineered_hotel_bookings.csv` — 62 model-ready features
+- `models/adr_predictor/` — GradientBoostingRegressor for price prediction
+- `models/cancel_predictor/` — RandomForestClassifier for cancellation prediction
+- `artifacts/feature_columns_adr.json` — ordered feature list for ADR model inference
+- `artifacts/feature_defaults.json` — training-set medians/modes used as inference defaults
+- `artifacts/country_encoding_map.json` — country code → encoded value lookup
+- `artifacts/feature_importances_adr.csv` — ranked ADR model feature importances
+- `artifacts/feature_importances_cancel.csv` — ranked cancellation model feature importances
+
+**Metrics logged per run:**
+
+| Metric | Model | Description |
+|---|---|---|
+| `adr_rmse` | ADR Regressor | Root mean squared error |
+| `adr_mae` | ADR Regressor | Mean absolute error |
+| `adr_r2` | ADR Regressor | R² score |
+| `cancel_auc` | Cancel Classifier | AUC-ROC |
+| `cancel_f1` | Cancel Classifier | F1 score |
+| `cancel_precision` | Cancel Classifier | Precision |
+| `cancel_recall` | Cancel Classifier | Recall |
+
+## Recommendation API
+
+The pipeline produces a FastAPI app (`api/app.py`) that answers:
+> *"Given my hotel type, country, party size, and number of nights — what month and day of the week should I book to get the lowest price?"*
+
+```bash
+# Start the API (after make train)
+docker exec -i ml-pipeline-dev uvicorn api.app:app --host 0.0.0.0 --port 5000 --reload
+
+# Example request
+curl -X POST http://localhost:5000/recommend \
+  -H "Content-Type: application/json" \
+  -d '{"hotel_type": "city", "guest_country": "GBR", "adults": 2, "children": 0, "num_days": 5}'
+```
+
+**Response:**
+```json
+{
+  "hotel_type": "city",
+  "guest_country": "GBR",
+  "adults": 2,
+  "children": 0,
+  "num_days": 5,
+  "best": {
+    "month": "January",
+    "day_of_week": "Monday",
+    "estimated_adr": 72.50,
+    "estimated_total": 362.50
+  },
+  "recommendations": [ ... ]
+}
+```
+
+The API sweeps all 84 arrival-date combinations (12 months × 7 days) through the trained ADR model and returns the top-N cheapest windows.
 
 ## Dataset
 
@@ -94,15 +150,19 @@ ml-pipeline/
 ├── steps/
 │   ├── ingest.py                # Step 1: load CSV, validate schema, drop leaky cols, log artifact
 │   ├── clean.py                 # Step 2: fill nulls, remove outliers, dedup, log artifact
-│   └── feature_engineer.py     # Step 3: derive 32 features, encode categoricals, log artifact
+│   ├── feature_engineer.py     # Step 3: derive 32 features, encode categoricals, log artifact
+│   ├── train.py                 # Step 4: train ADR regressor + cancel classifier, log models
+│   └── predict.py               # Recommendation logic: sweep 84 combos, rank by predicted ADR
+├── api/
+│   └── app.py                   # FastAPI recommendation API (POST /recommend)
 ├── conf/
 │   └── pipeline.yaml            # Hydra config (paths, model params, experiment name)
 ├── tests/
-│   ├── conftest.py              # Shared fixtures
-│   ├── unit/                    # Unit tests per step (ingest, clean, feature_engineer)
+│   ├── conftest.py              # Shared fixtures (including synthetic engineered DataFrames)
+│   ├── unit/                    # Unit tests per step (126 tests, 100% coverage)
 │   ├── data/                    # Schema and value validation tests
 │   ├── mlflow_artifacts/        # MLflow metric and artifact logging tests
-│   └── integration/             # End-to-end pipeline tests against real data
+│   └── integration/             # End-to-end pipeline + API tests
 ├── data/
 │   └── raw/
 │       └── hotel_bookings.csv   # Raw dataset
